@@ -53,7 +53,8 @@ def evaluer_modeles_etendus():
             "LGD": pt.BatchRetrieve(index_ref, wmodel="LGD"),
             "BM25 (k1=0.9,b=0.3)": pt.BatchRetrieve(index_ref, controls={"wmodel": "BM25", "bm25.k1": 0.9, "bm25.b": 0.3}),
         }
-
+        # Évaluation pour chaque modèle
+        results = []
         for model_name, model in models.items():
             print(f"\n📌 Modèle : {model_name}")
 
@@ -70,14 +71,22 @@ def evaluer_modeles_etendus():
                     [model],
                     topics_df,
                     qrels_df,
-                    eval_metrics=["AP", "P@5", "P@10", "RR", "nDCG@10"]
+                    eval_metrics=["MAP", "P@1", "P@5", "P@10", "R-P"]
                 )
                 print("\n📊 Résultats d’évaluation :")
                 print(eval)
+                results.append(eval)
             except ValueError as e:
                 print(f"⚠ Erreur d’évaluation : {e}")
 
         # Afficher les statistiques de l'index
+        # Combiner les résultats
+        final_results = pd.concat(results)
+        final_results.to_csv('evaluation_results.csv', index=False)
+
+        print("Résultats d'évaluation:")
+        print(final_results)
+        
         stats = index_ref.getCollectionStatistics()
         print(f"\n📚 Statistiques de l’index {index_name} :")
         print(f"- Documents : {stats.getNumberOfDocuments()}")
