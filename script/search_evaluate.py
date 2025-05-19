@@ -3,6 +3,9 @@ import pandas as pd
 import os
 from pyterrier.measures import *
 
+# Stocker les top 3 résultats globaux
+top_results_summary = []
+
 def clean_qrels(qrels):
     """Clean and validate the qrels dataframe"""
     qrels['label'] = pd.to_numeric(qrels['label'], errors='coerce')
@@ -15,7 +18,7 @@ def load_and_verify_data():
     """Load and verify qrels and queries with proper validation"""
     try:
         qrels = pd.read_csv("qrels.tsv", sep='\s+', header=None, 
-                          names=["qid", "iter", "docno", "label"])
+                            names=["qid", "iter", "docno", "label"])
         qrels = clean_qrels(qrels)
         qrels['docno'] = qrels['docno'].astype(str)
         qrels['qid'] = qrels['qid'].astype(str)
@@ -41,13 +44,12 @@ def load_and_verify_data():
             print("Evaluation will only work for queries with judgments")
 
         return queries, qrels
-
     except Exception as e:
         print(f"❌ Error loading data: {e}")
         return None, None
 
 def evaluate_model(model, model_name, index_name, topics_df, qrels):
-    """Evaluate a single model with comprehensive checks"""
+    """Evaluate a single model and record top 3 results per query"""
     print(f"\n● Evaluating {model_name} (Index: {index_name})")
 
     try:
@@ -59,35 +61,31 @@ def evaluate_model(model, model_name, index_name, topics_df, qrels):
             return None
 
         results = model.transform(eval_topics)
+
+        # Top 3 results per query
+        top3_per_query = results.groupby('qid').apply(
+            lambda df: df.nlargest(3, 'score')).reset_index(drop=True)
+
         print("Top 3 results:")
-        print(results[['qid', 'docno', 'score']].head(3))
+        print(top3_per_query[['qid', 'docno', 'score']].head(3))
 
-        matched_docs = qrels[
-            (qrels['qid'].isin(results['qid'])) & 
-            (qrels['docno'].isin(results['docno']))
-        ]
-        print(f"Found {len(matched_docs)} relevant judgments for retrieved documents")
+        # Enregistrer les résultats pour tableau final
+        for _, row in top3_per_query.iterrows():
+            top_results_summary.append({
+                "model": model_name,
+                "index": index_name,
+                "qid": row["qid"],
+                "docno": row["docno"],
+                "score": row["score"]
+            })
 
-        eval_results = pt.Experiment(
-            [model],
-            eval_topics,
-            qrels,
-            eval_metrics=[AP, P@1, P@5, P@10],
-            names=[model_name]
-        )
-
-        print(f"\nEvaluation Metrics: {model_name}")
-        print(eval_results)
-
-        return eval_results
-
+        return None
     except Exception as e:
         print(f"❌ Evaluation failed for {model_name}: {e}")
         return None
 
 def main():
     pt.java.init()
-
     topics_df, qrels = load_and_verify_data()
     if topics_df is None or qrels is None:
         return
@@ -98,8 +96,6 @@ def main():
         ('Lemmatized', "./index_lemma")
     ]
 
-    all_results = []
-
     for index_name, index_path in index_configs:
         print(f"\n{'='*50}\n📈 Evaluating {index_name} Index\n{'='*50}")
 
@@ -109,7 +105,7 @@ def main():
             print(f"\n📊 {index_name} Index Statistics:")
             print(f"- Documents: {stats.getNumberOfDocuments()}")
             print(f"- Unique terms: {stats.getNumberOfUniqueTerms()}")
-            print(f"- Average length: {stats.getAverageDocumentLength():.1f} terms/doc")
+            print(f"- Avg length: {stats.getAverageDocumentLength():.1f} terms/doc")
 
             models = {
                 "BM25": pt.terrier.Retriever(index_ref, wmodel="BM25"),
@@ -124,27 +120,25 @@ def main():
             }
 
             for model_name, model in models.items():
-                result = evaluate_model(model, model_name, index_name, topics_df, qrels)
-                if result is not None:
-                    result['index'] = index_name
-                    all_results.append(result)
+                evaluate_model(model, model_name, index_name, topics_df, qrels)
 
         except Exception as e:
             print(f"❌ Error processing index {index_name}: {e}")
             continue
 
-    if all_results:
-        final_results = pd.concat(all_results)
+    # Afficher le tableau final
+    if top_results_summary:
+        df_top3 = pd.DataFrame(top_results_summary)
+        df_top3 = df_top3.sort_values(by=["index", "model", "qid", "score"], ascending=[True, True, True, False])
+
+        print("\n📋 Final Top 3 Results per Model and Index:")
+        print(df_top3.to_string(index=False, float_format="%.4f"))
+
         os.makedirs("results", exist_ok=True)
-        final_results.to_csv("results/evaluation_results.csv", index=False)
-
-        # Print full table
-        print("\n📋 Full Evaluation Results:")
-        print(final_results.to_string(index=False))
-
-        print("\n✅ Evaluation complete. Results saved to results/evaluation_results.csv")
+        df_top3.to_csv("results/top3_results.csv", index=False)
+        print("\n✅ Résultats Top 3 sauvegardés dans: results/top3_results.csv")
     else:
-        print("\n❌ No valid results were generated")
+        print("\n❌ Aucun résultat Top 3 généré")
 
 if __name__ == "__main__":
     main()
